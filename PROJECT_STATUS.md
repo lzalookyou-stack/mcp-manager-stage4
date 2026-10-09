@@ -1,7 +1,7 @@
 # PROJECT_STATUS — mcp-manager
 
 > 跨对话 / 跨阶段的权威状态快照。**所有「已完成/未实现」的判断以本文件为准。**
-> 最后更新：2026-10-09（阶段 2 收口）
+> 最后更新：2026-10-09（阶段 3 收口）
 
 ---
 
@@ -21,7 +21,7 @@
 |---|---|---|---|
 | 1 调研与技术选型 | ✅ 已完成 | https://github.com/lzalookyou-stack/mcp-manager-stage1 | 提交 `ec27ff3`，已推送 |
 | 2 最小可运行骨架 | ✅ 已完成 | https://github.com/lzalookyou-stack/mcp-manager-stage2 | 77 项测试全绿；MCP stdio 冒烟 9 项通过；Web 实机验证通过 |
-| 3 搜索/分析/评分/安全审查 | ⬜ 未开始 | — | — |
+| 3 搜索/分析/评分/安全审查 | ✅ 已完成 | https://github.com/lzalookyou-stack/mcp-manager-stage3 | 154 项测试全绿；MCP stdio 冒烟 9 项通过；Web 实机验证通过 |
 | 4 网页控制台交互 | ⬜ 未开始 | — | — |
 | 5 安全安装闭环 | ⬜ 未开始 | — | — |
 | 6 插件适配器 | ⬜ 未开始 | — | — |
@@ -34,7 +34,7 @@
 |---|---|---|---|
 | 1 | https://github.com/lzalookyou-stack/mcp-manager-stage1 | 交付提交 `ec27ff3eddf3458302746caefe1a5334ba78928e`；状态回填提交 `806c58c` | ✅ 已推送（远端 `refs/heads/main` 已回读核对） |
 | 2 | https://github.com/lzalookyou-stack/mcp-manager-stage2 | 交付提交 `015fdcb521eea18abba32d940ba14fec9cc992ef`；状态回填提交 `b742dcb` | ✅ 已推送（远端 `refs/heads/main` 已回读核对，33 文件树经 API 核验） |
-| 3 | （推送后回填） | （推送后回填） | — |
+| 3 | https://github.com/lzalookyou-stack/mcp-manager-stage3 | 交付提交 `（推送后回填）`；状态回填提交 `（推送后回填）` | — |
 | 4 | （推送后回填） | （推送后回填） | — |
 | 5 | （推送后回填） | （推送后回填） | — |
 | 6 | （推送后回填） | （推送后回填） | — |
@@ -71,17 +71,38 @@
 
 测试：`tests/` 共 77 项（模型 / 安全 / 服务 / Web），含「无写接口」负向断言与「未实现能力必须抛异常」断言。
 
+### 阶段 3（已完成）
+
+**搜索 / 分析 / 评分 / 安全审查**，全部为本地可复现逻辑，不依赖在线模型。
+
+新增模块：
+- `app/search/github_client.py`：**仅用标准库 `urllib` 的只读** GitHub 客户端。`GitHubError` 带 `kind`（rate_limited / not_found / unauthorized / invalid / network / server / error）与限流元数据；`transport` 参数支持测试注入（不发真实请求）；令牌**只放 `Authorization` 头**，绝不写入日志或异常；单文件文本上限 `MAX_TEXT_BYTES = 512 KiB`，超限截断并标注。能力：`search_repositories` / `get_repository` / `get_latest_commit`（校验 40 位 SHA）/ `list_releases` / `list_directory` / `get_file`（base64 解码）。
+- `app/search/query.py`：自然语言 → GitHub 检索式。含中英文停用词与同义扩展表（「长期记忆」→`memory`、「轻量」→`lightweight`、「依赖少」→`zero-dependencies`）；支持 `language` / `min_stars` / `pushed_after`（校验 `YYYY-MM-DD`）/ `topics` / `in_name`。**无有效关键词时显式报错**，绝不返回空检索式。`notes` 声明「检索式由本地规则生成，未使用任何在线模型」。模块头声明它**不是安全控制**。
+- `app/analysis/security_review.py`：19 条静态检测规则（DL001–DL004 / SH001–SH003 / FS001–FS002 / CR001–CR002 / NET001–NET002 / AU001 / PS001 / DP001），输出带**文件 / 行号 / 片段 / 原因 / 证据等级**的 `Finding`；风险取最高严重度，存在 critical 即 `vetoed=True`。**报告始终携带 `SecurityReport.DISCLAIMER`**，且永不输出「绝对安全」类结论。
+- `app/analysis/scoring.py`：可解释评分。维度权重 维护 20% / 质量 25% / 安全 30% / 兼容 15% / 社区 10%；维度内权重全部显式声明；安全维度**未审查时给 0 分并标【未检查】**（保守默认），已审查时按 `{NONE:0, LOW:15, MEDIUM:40, HIGH:70}` 扣分，`vetoed` 时总分归零；Star 仅影响社区维度 40% 以内；每条理由均带来源。
+- `app/analysis/compare.py`：`compare_plugins` 输出 `{rows, highlights, notes}`，以**陈述性**方式点出证据缺口（存在 critical 被一票否决 / 未取得明确许可证 / 尚未锁定固定 commit / 存在未获取字段），**不做「最佳推荐」**。
+
+改造：
+- `app/models.py`：`Plugin` 增加 `fetched_at` / `missing_fields` / `security_report`；新增 `FindingCategory`、`Finding`、`SecurityReport`、`RepoMetrics`、`SearchQuery`、`CompareRow`。
+- `app/services/plugin_service.py`：新增 `SearchUnavailable`（**未配置客户端时显式失败，绝不返回空列表**）；实现 `build_query` / `search_remote`（落库为 `review_status=pending` 候选并写 `search.remote` 审计）/ `inspect_remote`（固定 commit + README/测试/CI/依赖清单探测 + Release 数，失败项记入 `missing_fields`）/ `review`（**先确保有 `pinned_ref`，否则拒绝在浮动引用上给结论**；抓取失败记 `skipped_files`）/ `score` / `compare`；**校验顺序**：先做本地可判定的来源校验，再要求远程客户端可用。
+- `app/runtime.py`：`Runtime.create(*, github=None)`，未显式传入时从 `MCPM_GITHUB_TOKEN` / `GITHUB_TOKEN` 构造客户端。
+
+测试：新增 `tests/test_github_client.py`、`test_security_review.py`、`test_scoring.py`、`test_query.py`、`test_stage3_service.py`（全部用注入假 transport，**不发真实网络请求**）。累计 **154 项**。
+
 ---
 
 ## 未实现（**严禁声称已实现**）
 
-以下能力在阶段 2 **确实不存在**，调用会显式失败（`NotImplementedError` 或返回 `not_implemented`）：
+以下能力在阶段 3 **确实不存在**，调用会显式失败（`NotImplementedError` / `SearchUnavailable` 或返回 `not_implemented`）：
 
-- `PluginService.search_remote` / `score` / `review` / `install` / `rollback`：全部 `raise NotImplementedError`（阶段 3/5 实现）。
+- `PluginService.install` / `rollback`：仍 `raise NotImplementedError`（阶段 5 实现）。
+- `PluginService.search_remote` / `inspect_remote` / `review` / `score` / `compare`：**已在阶段 3 实现**；但在**未配置 GitHub 令牌**时 `search_remote` 会抛 `SearchUnavailable`（显式失败，**不会**返回空列表被误读为「没有结果」）。
 - Web 层**没有任何写接口**（阶段 4/5 引入，届时必须带会话与 CSRF 令牌）；`tests/test_web.py::test_no_write_endpoints_exist` 为负向断言。
+- Web 层**没有 SSE 实时推送**（阶段 4 引入）。
 - MCP 工具 `request_install` **不产生任何安装行为**，恒返回 `{"ok": false, "error": "not_implemented"}` 并写 `actor=agent, outcome=denied` 审计。
-- 无插件适配器（阶段 6）、无真实远程搜索源接入（阶段 3）。
+- 无插件适配器（阶段 6）。
 - 本项目自身**尚无 LICENSE**（阶段 8 前确认）。
+- 安全审查为**静态模式匹配**：必然存在漏报，未命中**不代表**安全。
 
 ---
 
@@ -121,6 +142,34 @@ curl -s http://127.0.0.1:8765/api/health                     # {"status":"ok",..
 
 > 环境说明：系统 Python 受 PEP 668 保护，**必须使用项目内 `.venv`**；依赖走清华镜像安装。
 > `mcp 2.3.0` 实测：`FastMCP` 已改名为 `MCPServer`（`from mcp.server.mcpserver import MCPServer`），旧 `mcp.server.fastmcp` 导入会失败。
+
+阶段 3（可复跑，必须先建好 `.venv`）：
+
+```bash
+cd mcp-manager
+.venv/bin/python -m pytest                                   # 期望 154 passed
+.venv/bin/python scripts/smoke_mcp_stdio.py                  # 期望 SMOKE_EXIT=0，9 项 PASS
+.venv/bin/python run_web.py &                                # 真实启动
+curl -s http://127.0.0.1:8765/api/stats                      # {"total":0,...}
+```
+
+阶段 3 的实测结果（2026-10-09）：
+
+- `pytest`：**154 passed in 5.36s**。
+- `smoke_mcp_stdio.py`：**9 项 PASS，退出码 0**（与阶段 2 一致；`request_install` 仍被拒绝为 `not_implemented`）。
+- Web 实机（真实 uvicorn + 真实 curl）：`GET /` **200** 且携带严格 CSP（`default-src 'none'; script-src 'self'; …`，**不含 `unsafe-inline`**）与 `nosniff` / `DENY` / `no-referrer` / `same-origin`；无 Origin 的 `POST /api/plugins` **403 `csrf_origin_rejected`**；非法 Host **400 `invalid_host`**；`/docs` 与 `/openapi.json` 均 **404**；`/api/stats`、`/api/plugins` 均 **200**。
+- 阶段 3 首轮曾出现 11 项失败，已全部定位并修复（见「阶段 3 修复记录」）。
+
+### 阶段 3 修复记录（诚实留痕）
+
+首轮 `pytest` 为 **11 failed / 140 passed**，逐项定位后确认：
+
+1. **实现缺陷 1（免责声明未落地）**：`review_files` 从未把 `SecurityReport.DISCLAIMER` 写入 `notes`，与模块契约（「报告始终携带免责声明」）不符，测试因此在 `notes[-1]` 上 `IndexError`。→ 修实现：无论是否命中，均追加免责声明；未命中时额外说明「未命中不代表不存在风险」。
+2. **实现缺陷 2（校验顺序错误）**：`inspect_remote` / `review` 先取远程客户端、后校验来源，导致「非 GitHub 源」被误报成 `SearchUnavailable`，掩盖真正根因。→ 修实现：先做本地可判定的来源校验，再要求客户端可用。
+3. **测试数据缺陷（10 项）**：测试用单字符查询 `"x"`，被关键词过滤器（长度 < 2）丢弃后触发「检索式为空必须报错」这一**合理约束**。→ 修测试数据（改为 `"memory mcp"`），**未**放宽 `build_search_query` 的空检索式报错约束；并**新增**测试把该约束固化下来。
+4. **测试断言过弱**：免责声明用例的 `assert A or B` 使其形同虚设。→ 改为强断言 `SecurityReport.DISCLAIMER in report.notes`。
+
+> 全部修复均**未删除任何安全检查、未降低任何断言**；新增强断言与新增用例后，总数由 140 增至 154。
 
 ---
 

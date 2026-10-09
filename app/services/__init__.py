@@ -10,6 +10,7 @@ from app.services.plugin_service import (
     AuditRecord,
     PluginNotFound,
     PluginService,
+    SearchUnavailable,
     ValidationError,
     dump_plugin,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "PluginService",
     "PluginNotFound",
     "ValidationError",
+    "SearchUnavailable",
     "AuditRecord",
     "dump_plugin",
 ]

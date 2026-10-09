@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from app.models import InstallStatus, Plugin, PluginKind, RiskLevel
-from app.services import PluginNotFound, PluginService, ValidationError
+from app.services import (
+    PluginNotFound,
+    PluginService,
+    SearchUnavailable,
+    ValidationError,
+)
 
 
 def test_upsert_then_get_roundtrip(service: PluginService):
@@ -126,9 +131,7 @@ def test_stats(service: PluginService):
 @pytest.mark.parametrize(
     "method,args,kwargs",
     [
-        ("search_remote", ("query",), {}),
-        ("score", ("some-id",), {}),
-        ("review", ("some-id",), {}),
+        # 阶段 5 才实现的能力：必须显式失败
         # install / rollback 是 *, actor 关键字签名（刻意设计：必须记录操作者）
         ("install", ("some-id",), {"actor": "user"}),
         ("rollback", ("some-id",), {"actor": "user"}),
@@ -140,6 +143,26 @@ def test_unimplemented_methods_fail_loudly(
     """未实现的能力必须抛异常，绝不能返回假的成功结果。"""
     with pytest.raises(NotImplementedError):
         getattr(service, method)(*args, **kwargs)
+
+
+def test_search_without_github_client_fails_loudly(service: PluginService):
+    """未配置 GitHub 客户端时，搜索必须显式失败，**绝不**返回空列表。
+
+    返回空列表会被调用方误读为"没有搜索结果"，属于伪成功。
+    """
+    assert service._github is None
+    with pytest.raises(SearchUnavailable):
+        service.search_remote("memory")
+
+
+def test_score_missing_plugin_raises(service: PluginService):
+    with pytest.raises(PluginNotFound):
+        service.score("some-id")
+
+
+def test_review_missing_plugin_raises(service: PluginService):
+    with pytest.raises(PluginNotFound):
+        service.review("some-id")
 
 
 def test_install_requires_actor_kwarg(service: PluginService):

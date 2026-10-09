@@ -16,7 +16,7 @@ import hashlib
 import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -228,6 +228,17 @@ class Plugin(BaseModel):
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    # --- 数据获取溯源（阶段 3）---
+    fetched_at: datetime | None = Field(
+        default=None, description="远程数据获取时间；用于判断结论的新鲜度"
+    )
+    missing_fields: list[str] = Field(
+        default_factory=list, description="获取失败的字段名，显式暴露数据缺口"
+    )
+    security_report: "SecurityReport | None" = Field(
+        default=None, description="阶段 3 安全审查结果；None 表示尚未审查"
+    )
+
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -272,3 +283,128 @@ class Plugin(BaseModel):
             kind=kind,
             **kwargs,
         )
+
+
+# --------------------------------------------------------------------------- #
+# 阶段 3：搜索 / 分析 / 安全审查
+# --------------------------------------------------------------------------- #
+
+
+class FindingCategory(str, Enum):
+    """安全审查发现项的分类（对应阶段 3 需求清单）。"""
+
+    SHELL_EXECUTION = "shell_execution"                # shell / PowerShell 执行
+    INSTALL_SCRIPT = "install_script"                  # 安装脚本本身
+    FILESYSTEM_WRITE = "filesystem_write"              # 任意文件写入
+    FILESYSTEM_DELETE = "filesystem_delete"            # 任意文件删除
+    NETWORK_OUTBOUND = "network_outbound"              # 可疑外联
+    CREDENTIAL_ACCESS = "credential_access"            # API Key / 环境变量 / SSH 密钥
+    POST_INSTALL_AUTORUN = "post_install_autorun"      # 安装后自动执行
+    DYNAMIC_DOWNLOAD_EXECUTE = "dynamic_download_execute"  # 动态下载并执行未固定版本代码
+    DEPENDENCY_RISK = "dependency_risk"                # 依赖与供应链风险
+    PERSISTENCE = "persistence"                        # Hook / 启动脚本 / 持久化
+
+
+class Finding(BaseModel):
+    """一条安全审查发现项。
+
+    **必须**包含文件路径、代码位置、风险原因；不允许只有结论没有依据。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    category: FindingCategory
+    severity: RiskLevel
+    file: str = Field(description="命中的文件路径")
+    line: int | None = Field(default=None, description="行号（1 起）")
+    snippet: str | None = Field(default=None, description="命中的代码片段（已截断）")
+    reason: str = Field(description="为什么这是风险")
+    evidence: EvidenceLevel = EvidenceLevel.VERIFIED
+
+
+class SecurityReport(BaseModel):
+    """安全审查报告。
+
+    **不得**输出「绝对安全」「无恶意代码」这类无依据结论；
+    报告只陈述"扫了什么、没扫到什么、发现了什么"，并始终携带免责声明。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scanned_files: list[str] = Field(default_factory=list)
+    skipped_files: list[str] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
+    risk_level: RiskLevel = RiskLevel.NONE
+    vetoed: bool = Field(
+        default=False, description="存在 critical 级发现，评分一票否决"
+    )
+    coverage: str = Field(
+        default="none", description="none | partial | full —— 本次扫描的覆盖程度"
+    )
+    pinned_ref: str | None = Field(default=None, description="审查所针对的固定 commit")
+    generated_at: datetime = Field(default_factory=_utcnow)
+    notes: list[str] = Field(default_factory=list)
+
+    DISCLAIMER: ClassVar[str] = (
+        "本报告仅陈述已扫描文件中的静态模式命中情况，"
+        "不构成安全性保证，也不代表未发现问题即无风险。"
+    )
+
+
+class RepoMetrics(BaseModel):
+    """评分所需的仓库指标（全部来自可复现的 API 字段）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str
+    stars: int = Field(default=0, ge=0)
+    forks: int = Field(default=0, ge=0)
+    open_issues: int = Field(default=0, ge=0)
+    pushed_at: datetime | None = None
+    created_at: datetime | None = None
+    archived: bool = False
+    language: str | None = None
+    license_spdx: str | None = None
+    license_source: LicenseSource = LicenseSource.UNKNOWN
+    has_readme: bool = False
+    has_tests: bool = False
+    has_ci: bool = False
+    has_dependency_manifest: bool = False
+    releases_count: int = Field(default=0, ge=0)
+    fetched_at: datetime | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+
+
+class SearchQuery(BaseModel):
+    """自然语言需求 → GitHub 检索式的转换结果（保留原文与依据）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    raw_requirement: str
+    github_query: str
+    keywords: list[str] = Field(default_factory=list)
+    qualifiers: dict[str, str] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class CompareRow(BaseModel):
+    """候选对比中的一行。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plugin_id: str
+    name: str
+    repository: str | None = None
+    kind: PluginKind
+    pinned_ref: str | None = None
+    score_total: float = 0.0
+    score: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
+    risk_level: RiskLevel = RiskLevel.NONE
+    review_status: ReviewStatus = ReviewStatus.PENDING
+    license_spdx: str | None = None
+    license_source: LicenseSource = LicenseSource.UNKNOWN
+    stars: int = 0
+    fetched_at: datetime | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
