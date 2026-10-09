@@ -1,7 +1,7 @@
 # PROJECT_STATUS — mcp-manager
 
 > 跨对话 / 跨阶段的权威状态快照。**所有「已完成/未实现」的判断以本文件为准。**
-> 最后更新：2026-10-09（阶段 3 收口）
+> 最后更新：2026-10-09（阶段 4 收口）
 
 ---
 
@@ -22,7 +22,7 @@
 | 1 调研与技术选型 | ✅ 已完成 | https://github.com/lzalookyou-stack/mcp-manager-stage1 | 提交 `ec27ff3`，已推送 |
 | 2 最小可运行骨架 | ✅ 已完成 | https://github.com/lzalookyou-stack/mcp-manager-stage2 | 77 项测试全绿；MCP stdio 冒烟 9 项通过；Web 实机验证通过 |
 | 3 搜索/分析/评分/安全审查 | ✅ 已完成 | https://github.com/lzalookyou-stack/mcp-manager-stage3 | 154 项测试全绿；MCP stdio 冒烟 9 项通过；Web 实机验证通过 |
-| 4 网页控制台交互 | ⬜ 未开始 | — | — |
+| 4 网页控制台交互 | ✅ 已完成 | https://github.com/lzalookyou-stack/mcp-manager-stage4 | 175 项测试全绿；SSE 端到端真实验证；Web 实机验证通过 |
 | 5 安全安装闭环 | ⬜ 未开始 | — | — |
 | 6 插件适配器 | ⬜ 未开始 | — | — |
 | 7 MCP 集成 | ⬜ 未开始 | — | — |
@@ -35,7 +35,7 @@
 | 1 | https://github.com/lzalookyou-stack/mcp-manager-stage1 | 交付提交 `ec27ff3eddf3458302746caefe1a5334ba78928e`；状态回填提交 `806c58c` | ✅ 已推送（远端 `refs/heads/main` 已回读核对） |
 | 2 | https://github.com/lzalookyou-stack/mcp-manager-stage2 | 交付提交 `015fdcb521eea18abba32d940ba14fec9cc992ef`；状态回填提交 `b742dcb` | ✅ 已推送（远端 `refs/heads/main` 已回读核对，33 文件树经 API 核验） |
 | 3 | https://github.com/lzalookyou-stack/mcp-manager-stage3 | 交付提交 `2d4522bece572ca836dde936d30d8da01f8e99c6`；状态回填提交 `2c8684c7b773ceb6781aabbe7009b7a86a457eb7` | ✅ 已推送（远端 `refs/heads/main` 已回读核对 = 本地 HEAD，45 blob / 11 tree，`truncated: false`） |
-| 4 | （推送后回填） | （推送后回填） | — |
+| 4 | https://github.com/lzalookyou-stack/mcp-manager-stage4 | 交付提交 `（推送后回填）`；状态回填提交 `（推送后回填）` | — |
 | 5 | （推送后回填） | （推送后回填） | — |
 | 6 | （推送后回填） | （推送后回填） | — |
 | 7 | （推送后回填） | （推送后回填） | — |
@@ -89,6 +89,27 @@
 
 测试：新增 `tests/test_github_client.py`、`test_security_review.py`、`test_scoring.py`、`test_query.py`、`test_stage3_service.py`（全部用注入假 transport，**不发真实网络请求**）。累计 **154 项**。
 
+### 阶段 4（已完成）
+
+**本地网页控制台交互 + SSE 实时**。关键约束：在增加交互的同时，**仍然没有任何写接口**。
+
+新增模块：
+- `app/events.py`：进程内发布/订阅事件总线。单订阅队列上限 256（满则**保新弃旧**并计数）、并发订阅上限 32（超出 `subscribe()` 返回 `None` → 端点回 503）；`publish()` **绝不抛异常**（无事件循环 / 无订阅者 / 载荷不可序列化都只累加计数），避免通知故障拖垮主流程；支持 `bind_loop` + `call_soon_threadsafe` 跨线程投递。
+
+改造：
+- `app/services/plugin_service.py`：`__init__` 增加 `events` 参数；`audit()` 写库成功后广播 `audit` 事件；`search_remote` 广播 `search.started/finished/failed`；`review` 广播 `review.started/progress/finished`。**事件只含已脱敏的结构化字段**。
+- `app/runtime.py`：`Runtime` 增加 `events: EventBus`；`Runtime.create(*, events=None)`。
+- `app/web/app.py`：新增只读端点 `GET /api/query`（检索式预览，**不触网**）、`GET /api/search`、`GET /api/plugins/{id}/inspect`、`GET /api/plugins/{id}/review`、`GET /api/compare`、`GET /api/tasks`、`GET /api/events`（SSE）、`GET /api/events/stats`；新增异常映射：`SearchUnavailable` → **503**、`GitHubError` → **502（带 kind）**。SSE 含 15 秒心跳，断开即退订。
+- `web/index.html`：四个标签页（总览 / 发现 / 安装 / 任务与历史）+ 搜索表单 + 候选表 + 详情面板。
+- `web/assets/app.js`：全部用 `textContent`/`createElement`；所有请求均为 GET；搜索/检查/审查/对比按钮连接**真实后端**；SSE 用 `EventSource` 订阅并按事件类型渲染。
+- `pytest.ini`：新增 `asyncio_mode = strict`；`requirements.txt` 锁定 `pytest-asyncio==1.3.0`。
+
+测试：新增 `tests/test_events.py`（7 项）、`tests/test_web_stage4.py`（14 项）。累计 **175 项**。
+
+**阶段 4 的 SSE 验证方式（重要）**：`TestClient` 的同步 `stream()` 在等待流式响应时无法再发第二个请求（会死锁，且连接永不结束）。因此 SSE 的推送验证改为：
+1. 单元测试在 **ASGI 层**直接驱动（`app(scope, receive, send)`），真实验证 `event: audit` 与数据体；
+2. 另有一次**真实 HTTP 端到端**验证（真实 uvicorn + 后台 `curl -N` 挂 SSE，同时触发搜索与审查），实际收到 19 条事件（含 `search.started` / `audit` / `search.finished` / `review.started` / `review.progress` / `review.finished`），且**未出现任何令牌或凭据**。
+
 ---
 
 ## 未实现（**严禁声称已实现**）
@@ -97,8 +118,8 @@
 
 - `PluginService.install` / `rollback`：仍 `raise NotImplementedError`（阶段 5 实现）。
 - `PluginService.search_remote` / `inspect_remote` / `review` / `score` / `compare`：**已在阶段 3 实现**；但在**未配置 GitHub 令牌**时 `search_remote` 会抛 `SearchUnavailable`（显式失败，**不会**返回空列表被误读为「没有结果」）。
-- Web 层**没有任何写接口**（阶段 4/5 引入，届时必须带会话与 CSRF 令牌）；`tests/test_web.py::test_no_write_endpoints_exist` 为负向断言。
-- Web 层**没有 SSE 实时推送**（阶段 4 引入）。
+- Web 层**没有任何写接口**（阶段 5 引入，届时必须带会话与 CSRF 令牌）；`tests/test_web.py::test_no_write_endpoints_exist` 与 `tests/test_web_stage4.py::test_no_write_endpoints_still_true` 均为负向断言。
+- Web 层**没有 SSE 实时推送之外的任务表**：`/api/tasks` 直接读取审计日志；安装类任务（含进度/日志/结果）在阶段 5 出现。
 - MCP 工具 `request_install` **不产生任何安装行为**，恒返回 `{"ok": false, "error": "not_implemented"}` 并写 `actor=agent, outcome=denied` 审计。
 - 无插件适配器（阶段 6）。
 - 本项目自身**尚无 LICENSE**（阶段 8 前确认）。
@@ -170,6 +191,26 @@ curl -s http://127.0.0.1:8765/api/stats                      # {"total":0,...}
 4. **测试断言过弱**：免责声明用例的 `assert A or B` 使其形同虚设。→ 改为强断言 `SecurityReport.DISCLAIMER in report.notes`。
 
 > 全部修复均**未删除任何安全检查、未降低任何断言**；新增强断言与新增用例后，总数由 140 增至 154。
+
+阶段 4（可复跑，必须先建好 `.venv`）：
+
+```bash
+cd mcp-manager
+.venv/bin/python -m pytest                                   # 期望 175 passed
+.venv/bin/python scripts/smoke_mcp_stdio.py                  # 期望 SMOKE_EXIT=0，9 项 PASS
+.venv/bin/python run_web.py &                                # 真实启动
+curl -s http://127.0.0.1:8765/api/events/stats               # {"subscribers":0,...}
+curl -sN http://127.0.0.1:8765/api/events                    # 应收到 ": connected"
+```
+
+阶段 4 的实测结果（2026-10-09）：
+
+- `pytest`：**175 passed in 6.94s**。
+- `smoke_mcp_stdio.py`：**9 项 PASS，退出码 0**（与阶段 2/3 一致）。
+- Web 实机（真实 uvicorn + 真实 curl）：`GET /` **200** 且含阶段 4 面板与严格 CSP（**不含 `unsafe-inline`**）；`GET /api/query` **200**（返回真实检索式与「未使用任何在线模型」声明）；`GET /api/search`（无令牌）**503 `search_unavailable`**；`GET /api/events/stats` **200**；`GET /api/events` 真实收到 `: connected`；无 Origin 的 `POST /api/search` **403**；`/docs` **404**。
+- **SSE 端到端（真实 HTTP）**：后台 `curl -N` 挂 SSE 的同时触发真实搜索与审查，收到 **19 条真实事件**（`search.started` / `audit` / `search.finished` / `review.started` / `review.progress` ×6 / `review.finished`），事件体中**不含任何令牌或凭据**；`/api/events/stats` 在订阅挂起时显示 `subscribers: 1`。
+
+> 说明：SSE 的单元测试**不能**用 `TestClient.stream()`（同步客户端在等流式响应时无法再发第二个请求，会死锁），因此改用 ASGI 层直接驱动 `app(scope, receive, send)`，并用上述真实 HTTP 端到端做补充验证。
 
 ---
 

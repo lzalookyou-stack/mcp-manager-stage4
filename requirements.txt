@@ -16,5 +16,7 @@ mcp==2.3.0
 
 # 测试（阶段 2 安装后核实并锁定精确版本）
 pytest==9.1.1
+# 阶段 4：事件总线与 SSE 的异步测试
+pytest-asyncio==1.3.0
 # FastAPI TestClient 依赖 httpx；本环境由 httpx2 提供 httpx 模块
 httpx2==2.13.1

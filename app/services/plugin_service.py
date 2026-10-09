@@ -11,7 +11,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.analysis.compare import compare_plugins
 from app.analysis.scoring import score_metrics
@@ -32,6 +32,9 @@ from app.models import (
 from app.search.github_client import GitHubClient, GitHubError, RepoInfo
 from app.search.query import build_search_query
 from app.security import require_safe_identifier
+
+if TYPE_CHECKING:  # pragma: no cover - 仅类型标注
+    from app.events import EventBus
 
 
 class PluginNotFound(LookupError):
@@ -88,9 +91,20 @@ class PluginService:
         conn: sqlite3.Connection,
         *,
         github: GitHubClient | None = None,
+        events: "EventBus | None" = None,
     ) -> None:
         self._conn = conn
         self._github = github
+        self._events = events
+
+    # ------------------------------------------------------------------ #
+    # 事件（阶段 4：供 SSE 推送；失败绝不影响主流程）
+    # ------------------------------------------------------------------ #
+    def emit(self, event_type: str, **data: Any) -> None:
+        """向事件总线发布一条事件；未配置总线时静默忽略。"""
+        if self._events is None:
+            return
+        self._events.publish(event_type, data)
 
     # ------------------------------------------------------------------ #
     # 审计
@@ -115,6 +129,15 @@ class PluginService:
                 " VALUES(?,?,?,?,?,?)",
                 (_utcnow_iso(), actor, action, target, outcome, detail),
             )
+        # 审计写入成功后广播（detail 已在调用侧脱敏；此处只发结构化字段）。
+        self.emit(
+            "audit",
+            actor=actor,
+            action=action,
+            target=target,
+            outcome=outcome,
+            detail=detail,
+        )
 
     def list_audit(self, limit: int = 50) -> list[AuditRecord]:
         limit = max(1, min(int(limit), 500))
@@ -306,7 +329,14 @@ class PluginService:
             parsed = self.build_query(query)
             search_expr = parsed.github_query
 
-        infos = client.search_repositories(search_expr, per_page=limit)
+        self.emit("search.started", query=search_expr, limit=limit)
+        try:
+            infos = client.search_repositories(search_expr, per_page=limit)
+        except GitHubError as exc:
+            self.emit(
+                "search.failed", query=search_expr, kind=exc.kind, error=str(exc)
+            )
+            raise
         plugins: list[Plugin] = []
         for info in infos:
             plugins.append(self._upsert_repo(info, actor=actor))
@@ -317,6 +347,7 @@ class PluginService:
             outcome="ok",
             detail=f"命中 {len(plugins)} 个候选",
         )
+        self.emit("search.finished", query=search_expr, count=len(plugins))
         return plugins
 
     def _upsert_repo(self, info: RepoInfo, *, actor: str) -> Plugin:
@@ -526,18 +557,41 @@ class PluginService:
         assert ref is not None
 
         candidates = self._collect_review_paths(client, owner, repo, ref, max_files)
+        self.emit(
+            "review.started",
+            plugin_id=plugin_id,
+            ref=ref,
+            files=len(candidates),
+        )
         scanned: list[ScannedFile] = []
         skipped: list[str] = []
         notes: list[str] = []
-        for path in candidates:
+        for index, path in enumerate(candidates, start=1):
             try:
                 file = client.get_file(owner, repo, path, ref=ref)
             except GitHubError as exc:
                 skipped.append(f"{path}（{exc.kind}）")
+                self.emit(
+                    "review.progress",
+                    plugin_id=plugin_id,
+                    index=index,
+                    total=len(candidates),
+                    path=path,
+                    outcome="skipped",
+                    error=exc.kind,
+                )
                 continue
             if file.truncated:
                 notes.append(f"{path} 超过大小上限已截断，可能遗漏后段内容。")
             scanned.append(ScannedFile(path=path, content=file.content))
+            self.emit(
+                "review.progress",
+                plugin_id=plugin_id,
+                index=index,
+                total=len(candidates),
+                path=path,
+                outcome="scanned",
+            )
 
         report = review_files(
             scanned,
@@ -571,6 +625,15 @@ class PluginService:
                 f"覆盖 {len(report.scanned_files)} 文件，"
                 f"{len(report.findings)} 条发现，风险 {report.risk_level.value}"
             ),
+        )
+        self.emit(
+            "review.finished",
+            plugin_id=plugin_id,
+            ref=ref,
+            scanned=len(report.scanned_files),
+            findings=len(report.findings),
+            risk=report.risk_level.value,
+            vetoed=report.vetoed,
         )
         return result
 

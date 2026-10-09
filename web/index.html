@@ -10,25 +10,34 @@
 <body>
   <header>
     <h1>mcp-manager</h1>
-    <p class="subtitle">本地优先的 MCP / Agent 插件管理器 · 阶段 2 骨架</p>
+    <p class="subtitle">本地优先的 MCP / Agent 插件管理器 · 阶段 4 控制台（只读交互）</p>
     <p id="health" class="health">正在检测服务状态…</p>
+    <p id="sse-status" class="health">实时事件：未连接</p>
   </header>
 
+  <nav class="tabs" id="tabs">
+    <button type="button" class="tab active" data-tab="overview">总览</button>
+    <button type="button" class="tab" data-tab="discover">发现</button>
+    <button type="button" class="tab" data-tab="installed">已安装</button>
+    <button type="button" class="tab" data-tab="tasks">任务与历史</button>
+  </nav>
+
   <main>
-    <section>
+    <!-- ================= 总览 ================= -->
+    <section class="panel" id="panel-overview">
       <h2>概览</h2>
-      <dl id="stats" class="stats">
+      <dl class="stats">
         <dt>条目总数</dt><dd id="stat-total">—</dd>
         <dt>按类型</dt><dd id="stat-kind">—</dd>
         <dt>按安装状态</dt><dd id="stat-install">—</dd>
+        <dt>待确认操作</dt><dd id="stat-pending">0（阶段 5 引入）</dd>
+        <dt>失败任务</dt><dd id="stat-failed">—</dd>
+        <dt>最近变更</dt><dd id="stat-recent">—</dd>
       </dl>
-    </section>
-
-    <section>
       <h2>插件列表</h2>
       <p class="hint">
-        本阶段为只读视图。安装、审查与回滚将在后续阶段引入，
-        且必须由用户在此页面明确确认。
+        本阶段为只读交互：搜索、检查、审查、对比均为真实后端逻辑，
+        <strong>安装 / 卸载 / 回滚将在阶段 5 引入</strong>，且必须由你在此页面明确确认。
       </p>
       <table id="plugin-table">
         <thead>
@@ -39,16 +48,96 @@
         <tbody id="plugin-rows"></tbody>
       </table>
       <p id="plugin-empty" class="empty" hidden>暂无已登记条目。</p>
-    </section>
 
-    <section>
       <h2>审计日志（最近 20 条）</h2>
       <ul id="audit-list" class="audit"></ul>
+    </section>
+
+    <!-- ================= 发现 ================= -->
+    <section class="panel" id="panel-discover" hidden>
+      <h2>发现</h2>
+      <p class="hint">
+        用自然语言描述需求，或直接填 GitHub 检索式。搜索只读取公开仓库元数据，
+        <strong>不会下载或执行任何代码</strong>。
+      </p>
+      <form id="search-form" class="form" autocomplete="off">
+        <label>需求描述或检索式
+          <input type="text" id="q" name="q" placeholder="例如：轻量、支持长期记忆、依赖少的 MCP 项目" required />
+        </label>
+        <label>语言
+          <input type="text" id="language" name="language" placeholder="Python" />
+        </label>
+        <label>最少 Star
+          <input type="number" id="min_stars" name="min_stars" min="0" placeholder="50" />
+        </label>
+        <label>最近推送晚于
+          <input type="text" id="pushed_after" name="pushed_after" placeholder="2024-01-01" />
+        </label>
+        <label>Topic
+          <input type="text" id="topic" name="topic" placeholder="mcp" />
+        </label>
+        <label>返回条数
+          <input type="number" id="limit" name="limit" min="1" max="50" value="10" />
+        </label>
+        <div class="actions">
+          <button type="submit" id="btn-search">搜索</button>
+          <button type="button" id="btn-preview">仅预览检索式</button>
+        </div>
+      </form>
+      <p id="query-preview" class="note" hidden></p>
+      <p id="search-status" class="note" hidden></p>
+
+      <h2>候选列表</h2>
+      <div class="actions">
+        <button type="button" id="btn-compare" disabled>对比选中项</button>
+        <span class="hint" id="selected-count">已选 0 项</span>
+      </div>
+      <table id="candidate-table">
+        <thead>
+          <tr>
+            <th>选</th><th>名称</th><th>仓库</th><th>类型</th><th>最近更新</th>
+            <th>许可证</th><th>固定 commit</th><th>评分</th><th>风险</th>
+            <th>审查</th><th>安装</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="candidate-rows"></tbody>
+      </table>
+      <p id="candidate-empty" class="empty" hidden>尚无候选，请先搜索。</p>
+      <div id="compare-result" class="compare" hidden></div>
+      <div id="detail-panel" class="detail" hidden></div>
+    </section>
+
+    <!-- ================= 已安装 ================= -->
+    <section class="panel" id="panel-installed" hidden>
+      <h2>已安装</h2>
+      <p class="hint">
+        安装状态、版本、位置、配置、依赖与可回滚版本将在阶段 5 落地。
+        当前所有条目均为<strong>未安装</strong>，此处按钮为占位且不可用。
+      </p>
+      <table id="installed-table">
+        <thead>
+          <tr><th>名称</th><th>状态</th><th>版本/commit</th><th>位置</th><th>最近操作</th><th>操作</th></tr>
+        </thead>
+        <tbody id="installed-rows"></tbody>
+      </table>
+      <p id="installed-empty" class="empty" hidden>暂无条目。</p>
+    </section>
+
+    <!-- ================= 任务与历史 ================= -->
+    <section class="panel" id="panel-tasks" hidden>
+      <h2>任务与历史</h2>
+      <p class="hint">
+        操作历史来自审计日志；下方「实时事件」由 SSE 推送（服务端每 15 秒心跳）。
+        安装类任务将在阶段 5 出现。
+      </p>
+      <ul id="task-list" class="audit"></ul>
+      <h2>实时事件</h2>
+      <ul id="event-log" class="audit"></ul>
     </section>
   </main>
 
   <footer>
-    <p>仅监听回环地址 · 关闭了 OpenAPI 文档 · 所有结论均标注证据等级</p>
+    <p>仅监听回环地址 · 关闭了 OpenAPI 文档 · 所有结论均标注证据等级 · 阶段 4 无写接口</p>
   </footer>
 
   <script src="/assets/app.js"></script>
