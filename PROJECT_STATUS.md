@@ -34,7 +34,7 @@
 |---|---|---|---|
 | 1 | https://github.com/lzalookyou-stack/mcp-manager-stage1 | 交付提交 `ec27ff3eddf3458302746caefe1a5334ba78928e`；状态回填提交 `806c58c` | ✅ 已推送（远端 `refs/heads/main` 已回读核对） |
 | 2 | https://github.com/lzalookyou-stack/mcp-manager-stage2 | 交付提交 `015fdcb521eea18abba32d940ba14fec9cc992ef`；状态回填提交 `b742dcb` | ✅ 已推送（远端 `refs/heads/main` 已回读核对，33 文件树经 API 核验） |
-| 3 | https://github.com/lzalookyou-stack/mcp-manager-stage3 | 交付提交 `（推送后回填）`；状态回填提交 `（推送后回填）` | — |
+| 3 | https://github.com/lzalookyou-stack/mcp-manager-stage3 | 交付提交 `2d4522bece572ca836dde936d30d8da01f8e99c6`；状态回填提交 `（回填中）` | ✅ 已推送（远端 `refs/heads/main` 已回读核对 = 本地 HEAD，45 blob / 11 tree，`truncated: false`） |
 | 4 | （推送后回填） | （推送后回填） | — |
 | 5 | （推送后回填） | （推送后回填） | — |
 | 6 | （推送后回填） | （推送后回填） | — |
